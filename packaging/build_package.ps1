@@ -24,10 +24,31 @@ Copy-Item "$root\README.md" $distDir -Force
 Copy-Item "$PSScriptRoot\start_as_admin.bat" $distDir -Force
 Copy-Item "$PSScriptRoot\使用说明.txt" $distDir -Force
 
+# 清理运行时产生的本机状态，避免把校准/扫描数据打进分发包
+Remove-Item (Join-Path $distDir "anno_coords_config.json") -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $distDir "anno_islands_data.json") -Force -ErrorAction SilentlyContinue
+
 $zip = Join-Path $root "dist\AnnoCopilot-win64.zip"
 if (Test-Path $zip) {
     Remove-Item $zip -Force
 }
-Compress-Archive -Path $distDir -DestinationPath $zip -CompressionLevel Optimal
+
+$zipped = $false
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+        Compress-Archive -Path $distDir -DestinationPath $zip -CompressionLevel Optimal -ErrorAction Stop
+        $zipped = $true
+        break
+    } catch {
+        Write-Warning "压缩失败（第 $attempt 次）：$($_.Exception.Message)"
+        if (Test-Path $zip) {
+            Remove-Item $zip -Force
+        }
+        Start-Sleep -Seconds 3
+    }
+}
+if (-not $zipped) {
+    throw "压缩失败：$zip（请检查是否有进程占用 dist 目录中的文件）"
+}
 
 Write-Host "打包完成：$zip"
