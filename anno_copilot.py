@@ -24,13 +24,19 @@ import mss
 import numpy as np
 import pyautogui
 import pyperclip
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 pyautogui.PAUSE = 0.08
 pyautogui.FAILSAFE = True
 
-CONFIG_FILE = "anno_coords_config.json"
-DATA_FILE = "anno_islands_data.json"
+# 打包为 exe 后，配置与数据固定写在 exe 所在目录，避免依赖当前工作目录
+BASE_DIR = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
+CONFIG_FILE = os.path.join(BASE_DIR, "anno_coords_config.json")
+DATA_FILE = os.path.join(BASE_DIR, "anno_islands_data.json")
 
 try:
     from rapidocr_onnxruntime import RapidOCR
@@ -39,6 +45,30 @@ try:
 except ImportError:
     ocr_engine = None
     OCR_AVAILABLE = False
+
+
+def run_selftest():
+    """离线自检：验证 OCR 引擎与模型文件可用（打包产物排障用）。"""
+    if not OCR_AVAILABLE:
+        print("SELFTEST FAIL: rapidocr_onnxruntime 不可用")
+        return False
+    font = None
+    for fp in (r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\msyh.ttc"):
+        try:
+            font = ImageFont.truetype(fp, 36)
+            break
+        except Exception:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+    img = Image.new("RGB", (820, 140), (20, 26, 36))
+    draw = ImageDraw.Draw(img)
+    draw.text((20, 40), "DEMAND 120 SUPPLY 86", font=font, fill=(235, 235, 235))
+    result, _ = ocr_engine(np.array(img))
+    texts = [text for _, text, _ in (result or [])]
+    ok = any("120" in t and "86" in t for t in texts)
+    print("SELFTEST:", "OK" if ok else "FAIL", texts)
+    return ok
 
 # =====================================================================
 # 1. 纪元1800 核心物资字典与图标库
@@ -880,6 +910,9 @@ def start_hotkey_listener():
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(0 if run_selftest() else 1)
+
     print("=" * 68)
     print("⚓ 《纪元1800》全自动贸易指挥中心 (Anno 1800 Trade Copilot) 已启动")
     print("=" * 68)
@@ -894,7 +927,8 @@ if __name__ == "__main__":
     print("=" * 68)
 
     threading.Thread(target=start_hotkey_listener, daemon=True).start()
-    webbrowser.open("http://127.0.0.1:18000")
+    if "--no-browser" not in sys.argv:
+        webbrowser.open("http://127.0.0.1:18000")
 
     server = HTTPServer(("127.0.0.1", 18000), CopilotHTTPHandler)
     server.serve_forever()

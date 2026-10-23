@@ -5,6 +5,11 @@ __pycache__/
 # 项目虚拟环境
 .venv/
 
+# 打包产物
+build/
+dist/
+*.zip
+
 # 运行时生成的本机状态
 anno_coords_config.json
 anno_islands_data.json
