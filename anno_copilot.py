@@ -26,6 +26,11 @@ import pyautogui
 import pyperclip
 from PIL import Image, ImageDraw, ImageFont
 
+try:
+    import winsound
+except ImportError:
+    winsound = None
+
 pyautogui.PAUSE = 0.08
 pyautogui.FAILSAFE = True
 
@@ -45,6 +50,14 @@ try:
 except ImportError:
     ocr_engine = None
     OCR_AVAILABLE = False
+
+CALIBRATION_ACTIVE = threading.Event()
+CALIBRATION_CAPTURE = threading.Event()
+CALIBRATION_CANCEL = threading.Event()
+
+
+class CalibrationCancelled(Exception):
+    pass
 
 
 def run_selftest():
@@ -464,7 +477,7 @@ def batch_scan_all_islands(island_count=5):
 # 5. F9 快捷键：交互式分辨率坐标与 Ctrl+Q 截图区域校准向导
 # =====================================================================
 class CalibrationOverlay:
-    """置顶、半透明、鼠标可穿透的提示浮层，用于在游戏画面上显示校准指引。"""
+    """置顶、半透明、鼠标可穿透的提示浮层；每帧重新置顶以对抗游戏窗口。"""
 
     WIDTH = 1020
 
@@ -473,6 +486,10 @@ class CalibrationOverlay:
         self._title = None
         self._text = None
         self._height = 160
+        self.hwnd = 0
+        self._mon_left = 0
+        self._mon_top = 0
+        self._mon_width = self.WIDTH
         try:
             import tkinter as tk
 
@@ -483,9 +500,9 @@ class CalibrationOverlay:
             root.attributes("-alpha", 0.92)
             bg = "#0f141c"
             root.configure(bg="#d4af37")
-            screen_w = root.winfo_screenwidth()
-            x = max(0, (screen_w - self.WIDTH) // 2)
-            root.geometry(f"{self.WIDTH}x{self._height}+{x}+16")
+            self._mon_left, self._mon_top, self._mon_width = self._screen_geometry(root)
+            x = self._mon_left + max(0, (self._mon_width - self.WIDTH) // 2)
+            root.geometry(f"{self.WIDTH}x{self._height}+{x}+{self._mon_top + 16}")
 
             border = tk.Frame(root, bg="#d4af37")
             border.pack(fill="both", expand=True, padx=2, pady=2)
@@ -505,15 +522,45 @@ class CalibrationOverlay:
             self._text.pack(pady=(0, 8))
 
             root.update_idletasks()
-            self._apply_click_through(root)
+            self.hwnd = self._get_hwnd(root)
+            self._apply_click_through()
             root.deiconify()
             root.update()
             self.root = root
+            self._ensure_topmost()
         except Exception as exc:
-            print(f"[F9 浮层] 无法创建置顶提示（{exc}），将只在控制台显示指引。")
+            print(f"[F9 浮层] 无法创建置顶提示（{exc}），将改用语音与控制台指引。")
             self.root = None
 
-    def _apply_click_through(self, root):
+    def _screen_geometry(self, root):
+        """优先取游戏窗口所在显示器，找不到时取鼠标所在显示器。"""
+        try:
+            import win32api
+            import win32gui
+
+            hwnd = win32gui.FindWindow(None, "Anno 1800")
+            if hwnd:
+                monitor = win32api.MonitorFromRect(
+                    win32gui.GetWindowRect(hwnd), win32api.MONITOR_DEFAULTTONEAREST
+                )
+            else:
+                monitor = win32api.MonitorFromPoint(
+                    win32api.GetCursorPos(), win32api.MONITOR_DEFAULTTONEAREST
+                )
+            left, top, right, _bottom = win32api.GetMonitorInfo(monitor)["Monitor"]
+            return left, top, right - left
+        except Exception:
+            return 0, 0, root.winfo_screenwidth()
+
+    def _get_hwnd(self, root):
+        try:
+            import ctypes
+
+            return ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+        except Exception:
+            return root.winfo_id()
+
+    def _apply_click_through(self):
         try:
             import ctypes
 
@@ -523,16 +570,35 @@ class CalibrationOverlay:
             WS_EX_TOOLWINDOW = 0x00000080
             WS_EX_NOACTIVATE = 0x08000000
 
-            hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            style = ctypes.windll.user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
             ctypes.windll.user32.SetWindowLongW(
-                hwnd,
+                self.hwnd,
                 GWL_EXSTYLE,
                 style
                 | WS_EX_LAYERED
                 | WS_EX_TRANSPARENT
                 | WS_EX_TOOLWINDOW
                 | WS_EX_NOACTIVATE,
+            )
+        except Exception:
+            pass
+
+    def _ensure_topmost(self):
+        if self.root is None or not self.hwnd:
+            return
+        try:
+            import ctypes
+
+            HWND_TOPMOST = -1
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOACTIVATE = 0x0010
+            SWP_SHOWWINDOW = 0x0040
+            ctypes.windll.user32.SetWindowPos(
+                self.hwnd,
+                HWND_TOPMOST,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
         except Exception:
             pass
@@ -545,10 +611,19 @@ class CalibrationOverlay:
             self._text.config(text=text)
             if self._text.winfo_reqheight() > self._height - 70:
                 self._height = min(240, self._text.winfo_reqheight() + 70)
-                screen_w = self.root.winfo_screenwidth()
-                x = max(0, (screen_w - self.WIDTH) // 2)
-                self.root.geometry(f"{self.WIDTH}x{self._height}+{x}+16")
+                x = self._mon_left + max(0, (self._mon_width - self.WIDTH) // 2)
+                self.root.geometry(f"{self.WIDTH}x{self._height}+{x}+{self._mon_top + 16}")
             self.root.update()
+            self._ensure_topmost()
+        except Exception:
+            pass
+
+    def pump(self):
+        if self.root is None:
+            return
+        try:
+            self.root.update()
+            self._ensure_topmost()
         except Exception:
             pass
 
@@ -561,11 +636,51 @@ class CalibrationOverlay:
             self.root = None
 
 
+class Speech:
+    """Windows SAPI 语音播报；优先使用中文语音，不可用时静默降级。"""
+
+    def __init__(self):
+        self.voice = None
+        try:
+            import pythoncom
+            import win32com.client
+
+            pythoncom.CoInitialize()
+            self.voice = win32com.client.Dispatch("SAPI.SpVoice")
+            self.voice.Volume = 100
+            self.voice.Rate = 1
+            voices = self.voice.GetVoices()
+            for i in range(voices.Count):
+                desc = voices.Item(i).GetDescription().lower()
+                if any(k in desc for k in ("chinese", "huihui", "yaoyao", "kangkang", "xiaoxiao", "中文")):
+                    self.voice.Voice = voices.Item(i)
+                    break
+        except Exception:
+            self.voice = None
+
+    def say(self, text):
+        if self.voice is None:
+            return
+        try:
+            self.voice.Speak(text, 0)
+        except Exception:
+            pass
+
+
+def _beep(freq=880, duration=90):
+    if winsound is None:
+        return
+    try:
+        winsound.Beep(freq, duration)
+    except Exception:
+        pass
+
+
 def run_calibration_wizard():
     global COORDS
     print("\n" + "=" * 65)
     print("🎯 启动【纪元1800 分辨率坐标与 OCR 截图框校准向导】")
-    print("提示会以置顶浮层显示在游戏画面上，按提示把鼠标悬停到位即可，无需点击")
+    print("语音会播报每一步；把鼠标移到目标位置后按 F8 记录，按 Esc 取消")
     print("=" * 65)
 
     point_steps = [
@@ -583,53 +698,76 @@ def run_calibration_wizard():
 
     total_steps = len(point_steps) + 4
     step_idx = 0
+
+    CALIBRATION_ACTIVE.set()
+    CALIBRATION_CAPTURE.clear()
+    CALIBRATION_CANCEL.clear()
     overlay = CalibrationOverlay()
+    speech = Speech()
 
-    def show(desc, seconds=None):
-        text = desc if seconds is None else f"{desc}\n\n{seconds} 秒后自动记录鼠标位置"
+    def remind(title, text):
         if overlay.root is not None:
-            overlay.update(f"F9 校准 · 第 {step_idx}/{total_steps} 步", text)
-        suffix = "" if seconds is None else f"（{seconds} 秒后记录）"
-        print(f"\n👉 第 {step_idx}/{total_steps} 步: {desc} {suffix}")
+            overlay.update(title, text)
+        else:
+            print(f"[{title}] {text.replace(chr(10), ' ')}")
 
-    def wait_and_capture(desc, seconds=4):
+    def wait_capture(desc):
         nonlocal step_idx
         step_idx += 1
-        for sec in range(seconds, 0, -1):
-            show(desc, sec)
-            time.sleep(1)
+        title = f"F9 校准 · 第 {step_idx}/{total_steps} 步"
+        remind(title, f"{desc}\n\n把鼠标移到目标位置后按 F8 记录（Esc 取消）")
+        print(f"\n👉 第 {step_idx}/{total_steps} 步: {desc}  （按 F8 记录，Esc 取消）")
+        _beep(880, 90)
+        speech.say(f"第 {step_idx} 步。{desc}。放好鼠标后按 F8 记录。")
+
+        last_remind = time.time()
+        while True:
+            if CALIBRATION_CANCEL.is_set():
+                raise CalibrationCancelled()
+            if CALIBRATION_CAPTURE.wait(timeout=0.2):
+                CALIBRATION_CAPTURE.clear()
+                break
+            if overlay.root is not None:
+                overlay.pump()
+            if time.time() - last_remind >= 12:
+                speech.say("请把鼠标移到目标位置，然后按 F8 记录。")
+                last_remind = time.time()
+
         x, y = pyautogui.position()
-        if overlay.root is not None:
-            overlay.update(
-                f"✅ 已记录 · 第 {step_idx}/{total_steps} 步",
-                f"{desc}\n坐标：[{x}, {y}]",
-            )
-            time.sleep(0.4)
+        remind(f"✅ 已记录 · 第 {step_idx}/{total_steps} 步", f"{desc}\n坐标：[{x}, {y}]")
         print(f"   ✅ 已记录坐标: [{x}, {y}]")
+        _beep(1320, 80)
+        speech.say("已记录。")
+        time.sleep(0.3)
         return x, y
 
     try:
         for key, desc in point_steps:
-            x, y = wait_and_capture(desc)
+            x, y = wait_capture(desc)
             COORDS[key] = [x, y]
 
-        x1, y1 = wait_and_capture("Ctrl+Q 面板：把鼠标放在左侧【当前岛屿名字】的左上角")
-        x2, y2 = wait_and_capture("Ctrl+Q 面板：把鼠标放在左侧【当前岛屿名字】的右下角")
+        x1, y1 = wait_capture("Ctrl+Q 面板：把鼠标放在左侧【当前岛屿名字】的左上角")
+        x2, y2 = wait_capture("Ctrl+Q 面板：把鼠标放在左侧【当前岛屿名字】的右下角")
         COORDS["ctrl_q_island_box"] = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
 
-        x1, y1 = wait_and_capture("Ctrl+Q 面板：把鼠标放在中间【物资列表区域】的左上角（包含物资名与右侧数字）")
-        x2, y2 = wait_and_capture("Ctrl+Q 面板：把鼠标放在中间【物资列表区域】的右下角")
+        x1, y1 = wait_capture("Ctrl+Q 面板：把鼠标放在中间【物资列表区域】的左上角（包含物资名与右侧数字）")
+        x2, y2 = wait_capture("Ctrl+Q 面板：把鼠标放在中间【物资列表区域】的右下角")
         COORDS["ctrl_q_list_box"] = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
 
         save_coords(COORDS)
         print("\n🎉 校准全部完成！配置已保存至 anno_coords_config.json。\n")
-        if overlay.root is not None:
-            overlay.update(
-                "🎉 校准完成",
-                "坐标已保存。浮层将在 2 秒后关闭，可以按 Ctrl+Q 后使用 F8 / F7 扫描。",
-            )
-            time.sleep(2)
+        remind("🎉 校准完成", "坐标已保存。浮层将在 2 秒后关闭，可以按 Ctrl+Q 后使用 F8 / F7 扫描。")
+        speech.say("校准完成，坐标已保存。")
+        time.sleep(2)
+    except CalibrationCancelled:
+        print("\n⏹️ 校准已取消，本次修改未保存。")
+        remind("⏹️ 已取消", "校准已取消，按 F9 可重新开始。")
+        speech.say("校准已取消。")
+        time.sleep(1)
     finally:
+        CALIBRATION_ACTIVE.clear()
+        CALIBRATION_CAPTURE.clear()
+        CALIBRATION_CANCEL.clear()
         overlay.close()
 
 
@@ -1019,11 +1157,42 @@ class CopilotHTTPHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "ok"})
 
 
+def _on_f7():
+    if CALIBRATION_ACTIVE.is_set():
+        return
+    threading.Thread(target=batch_scan_all_islands, daemon=True).start()
+
+
+def _on_f8():
+    if CALIBRATION_ACTIVE.is_set():
+        CALIBRATION_CAPTURE.set()
+        return
+    threading.Thread(target=scan_ctrl_q_screen, daemon=True).start()
+
+
+def _on_f9():
+    if CALIBRATION_ACTIVE.is_set():
+        return
+    threading.Thread(target=run_calibration_wizard, daemon=True).start()
+
+
+def _on_f10():
+    if CALIBRATION_ACTIVE.is_set():
+        return
+    threading.Thread(target=dump_ship_cargo_macro, daemon=True).start()
+
+
+def _on_esc():
+    if CALIBRATION_ACTIVE.is_set():
+        CALIBRATION_CANCEL.set()
+
+
 def start_hotkey_listener():
-    keyboard.add_hotkey("f7", lambda: threading.Thread(target=batch_scan_all_islands, daemon=True).start())
-    keyboard.add_hotkey("f8", lambda: threading.Thread(target=scan_ctrl_q_screen, daemon=True).start())
-    keyboard.add_hotkey("f9", lambda: threading.Thread(target=run_calibration_wizard, daemon=True).start())
-    keyboard.add_hotkey("f10", lambda: threading.Thread(target=dump_ship_cargo_macro, daemon=True).start())
+    keyboard.add_hotkey("f7", _on_f7)
+    keyboard.add_hotkey("f8", _on_f8)
+    keyboard.add_hotkey("f9", _on_f9)
+    keyboard.add_hotkey("f10", _on_f10)
+    keyboard.add_hotkey("esc", _on_esc)
     keyboard.wait()
 
 
@@ -1039,6 +1208,13 @@ if __name__ == "__main__":
         ov.close()
         sys.exit(0)
 
+    if "--voice-test" in sys.argv:
+        sp = Speech()
+        print("VOICE:", "OK" if sp.voice is not None else "UNAVAILABLE")
+        if sp.voice is not None:
+            sp.say("语音测试成功，校准时会播报每一步。")
+        sys.exit(0 if sp.voice is not None else 1)
+
     print("=" * 68)
     print("⚓ 《纪元1800》全自动贸易指挥中心 (Anno 1800 Trade Copilot) 已启动")
     print("=" * 68)
@@ -1047,7 +1223,7 @@ if __name__ == "__main__":
     print("⌨️ 游戏内全局热键：")
     print("  • [F7]  在 Ctrl+Q 界面自动顺着左侧列表依次点击岛屿，全图批量扫描")
     print("  • [F8]  在 Ctrl+Q 界面对当前选中岛屿执行【多页滚轮自动截图 + 合并识别】")
-    print("  • [F9]  启动坐标校准向导（提示会以置顶浮层显示在游戏画面上）")
+    print("  • [F9]  启动坐标校准向导（中文语音播报 + 浮层；按 F8 记录，Esc 取消）")
     print("  • [F10] 一键清空当前选中船只的 6 个货仓残留杂物")
     print("  • [紧急中断] 自动点击期间将鼠标猛甩到屏幕左上角 (0,0) 即可立即终止")
     print("=" * 68)

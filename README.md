@@ -87,7 +87,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_package.ps1
 
 1. 将游戏设为**无边框窗口化**并进入存档。
 2. 双击 `start_copilot.bat` 启动，浏览器访问 `http://127.0.0.1:18000`。
-3. **首次使用按 `F9`**：校准提示会以置顶浮层显示在游戏画面顶部，按提示把鼠标悬停到各界面元素上（无需点击），倒计时结束自动记录并保存配置。
+3. **首次使用按 `F9`**：程序会用中文语音逐步播报，并在游戏画面上显示置顶浮层；把鼠标移到目标位置后按 `F8` 记录，按 `Esc` 取消。若游戏使用独占全屏，浮层可能无法显示，但语音和按键记录仍然可用（建议改为无边框窗口化）。
 4. 游戏内按 `Ctrl+Q` 打开生产统计：
    - 按 `F8` 扫描当前岛屿；
    - 按 `F7` 自动遍历左侧岛屿列表，批量扫描全图。
@@ -99,9 +99,10 @@ powershell -ExecutionPolicy Bypass -File packaging\build_package.ps1
 | 热键 | 功能 |
 | --- | --- |
 | `F7` | 批量遍历左侧岛屿并逐个扫描 |
-| `F8` | 扫描当前岛屿（多页滚动） |
-| `F9` | 启动坐标与截图框校准向导 |
+| `F8` | 扫描当前岛屿（多页滚动）；校准期间用于记录当前坐标 |
+| `F9` | 启动坐标校准向导（中文语音 + 浮层） |
 | `F10` | 清空当前选中船只的 6 个货仓槽位 |
+| `Esc` | 校准期间取消校准 |
 | 鼠标甩到左上角 | 紧急中断所有自动操作 |
 
 ## 校准与配置
@@ -116,6 +117,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_package.ps1
 | --- | --- |
 | 提示未检测到 `rapidocr_onnxruntime` | 执行 `pip install -r requirements.txt`，或直接使用 `start_copilot.bat` |
 | F7–F10 与游戏快捷键冲突 | 修改 `anno_copilot.py` 底部的 `keyboard.add_hotkey` 绑定 |
+| 提示浮层被游戏遮挡 | 独占全屏下外部浮层无法显示；请改为无边框窗口化，或直接听语音提示、按 `F8` 完成校准 |
 | 4K 下出现漏行 / 串行 | 调大 `parse_single_page_goods()` 中的行聚类阈值 `22`（像素） |
 | 窗口聚焦失败 | 确认游戏窗口标题精确为 `Anno 1800`，或调整 `focus_anno_window()` |
 | 写入航线期间看板卡顿 | 内置 `HTTPServer` 是单线程的，宏执行期间轮询会排队，属正常现象 |
