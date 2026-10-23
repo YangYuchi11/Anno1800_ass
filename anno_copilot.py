@@ -463,11 +463,109 @@ def batch_scan_all_islands(island_count=5):
 # =====================================================================
 # 5. F9 快捷键：交互式分辨率坐标与 Ctrl+Q 截图区域校准向导
 # =====================================================================
+class CalibrationOverlay:
+    """置顶、半透明、鼠标可穿透的提示浮层，用于在游戏画面上显示校准指引。"""
+
+    WIDTH = 1020
+
+    def __init__(self):
+        self.root = None
+        self._title = None
+        self._text = None
+        self._height = 160
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+            root.withdraw()
+            root.overrideredirect(True)
+            root.attributes("-topmost", True)
+            root.attributes("-alpha", 0.92)
+            bg = "#0f141c"
+            root.configure(bg="#d4af37")
+            screen_w = root.winfo_screenwidth()
+            x = max(0, (screen_w - self.WIDTH) // 2)
+            root.geometry(f"{self.WIDTH}x{self._height}+{x}+16")
+
+            border = tk.Frame(root, bg="#d4af37")
+            border.pack(fill="both", expand=True, padx=2, pady=2)
+            inner = tk.Frame(border, bg=bg)
+            inner.pack(fill="both", expand=True)
+
+            self._title = tk.Label(
+                inner, text="", fg="#d4af37", bg=bg,
+                font=("Microsoft YaHei", 17, "bold"),
+            )
+            self._title.pack(pady=(8, 2))
+            self._text = tk.Label(
+                inner, text="", fg="#e2e8f0", bg=bg,
+                font=("Microsoft YaHei", 15),
+                wraplength=self.WIDTH - 60, justify="center",
+            )
+            self._text.pack(pady=(0, 8))
+
+            root.update_idletasks()
+            self._apply_click_through(root)
+            root.deiconify()
+            root.update()
+            self.root = root
+        except Exception as exc:
+            print(f"[F9 浮层] 无法创建置顶提示（{exc}），将只在控制台显示指引。")
+            self.root = None
+
+    def _apply_click_through(self, root):
+        try:
+            import ctypes
+
+            GWL_EXSTYLE = -20
+            WS_EX_LAYERED = 0x00080000
+            WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_NOACTIVATE = 0x08000000
+
+            hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd,
+                GWL_EXSTYLE,
+                style
+                | WS_EX_LAYERED
+                | WS_EX_TRANSPARENT
+                | WS_EX_TOOLWINDOW
+                | WS_EX_NOACTIVATE,
+            )
+        except Exception:
+            pass
+
+    def update(self, title, text):
+        if self.root is None:
+            return
+        try:
+            self._title.config(text=title)
+            self._text.config(text=text)
+            if self._text.winfo_reqheight() > self._height - 70:
+                self._height = min(240, self._text.winfo_reqheight() + 70)
+                screen_w = self.root.winfo_screenwidth()
+                x = max(0, (screen_w - self.WIDTH) // 2)
+                self.root.geometry(f"{self.WIDTH}x{self._height}+{x}+16")
+            self.root.update()
+        except Exception:
+            pass
+
+    def close(self):
+        if self.root is not None:
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+            self.root = None
+
+
 def run_calibration_wizard():
     global COORDS
     print("\n" + "=" * 65)
     print("🎯 启动【纪元1800 分辨率坐标与 OCR 截图框校准向导】")
-    print("操作说明：请根据提示将鼠标悬停在游戏对应位置，4 秒倒计时结束自动记录")
+    print("提示会以置顶浮层显示在游戏画面上，按提示把鼠标悬停到位即可，无需点击")
     print("=" * 65)
 
     point_steps = [
@@ -483,36 +581,56 @@ def run_calibration_wizard():
         ("input_route_name",     "将鼠标放在顶部的【航线名称文本框】上")
     ]
 
-    for key, desc in point_steps:
-        print(f"\n👉 校准点 ({key}): {desc}")
-        for sec in [4, 3, 2, 1]:
-            print(f"   倒计时 {sec} 秒...", end="\r")
+    total_steps = len(point_steps) + 4
+    step_idx = 0
+    overlay = CalibrationOverlay()
+
+    def show(desc, seconds=None):
+        text = desc if seconds is None else f"{desc}\n\n{seconds} 秒后自动记录鼠标位置"
+        if overlay.root is not None:
+            overlay.update(f"F9 校准 · 第 {step_idx}/{total_steps} 步", text)
+        suffix = "" if seconds is None else f"（{seconds} 秒后记录）"
+        print(f"\n👉 第 {step_idx}/{total_steps} 步: {desc} {suffix}")
+
+    def wait_and_capture(desc, seconds=4):
+        nonlocal step_idx
+        step_idx += 1
+        for sec in range(seconds, 0, -1):
+            show(desc, sec)
             time.sleep(1)
         x, y = pyautogui.position()
-        COORDS[key] = [x, y]
-        print(f"   ✅ 已记录坐标: [{x}, {y}]          ")
+        if overlay.root is not None:
+            overlay.update(
+                f"✅ 已记录 · 第 {step_idx}/{total_steps} 步",
+                f"{desc}\n坐标：[{x}, {y}]",
+            )
+            time.sleep(0.4)
+        print(f"   ✅ 已记录坐标: [{x}, {y}]")
+        return x, y
 
-    print("\n👉 接下来校准 Ctrl+Q 统计面板的 OCR 截图范围（请先按 Ctrl+Q 打开生产统计面板）：")
-    print("   1. 请将鼠标放在左侧【当前选中岛屿名字】的【左上角】...")
-    time.sleep(4)
-    ix1, iy1 = pyautogui.position()
-    print("   2. 请将鼠标放在左侧【当前选中岛屿名字】的【右下角】...")
-    time.sleep(4)
-    ix2, iy2 = pyautogui.position()
-    COORDS["ctrl_q_island_box"] = [min(ix1, ix2), min(iy1, iy2), max(ix1, ix2), max(iy1, iy2)]
-    print(f"   ✅ 岛屿名区域已锁定: {COORDS['ctrl_q_island_box']}")
+    try:
+        for key, desc in point_steps:
+            x, y = wait_and_capture(desc)
+            COORDS[key] = [x, y]
 
-    print("   3. 请将鼠标放在中间【物资列表区域】的【左上角】（包含物资名与右侧绿/蓝条数字）...")
-    time.sleep(4)
-    lx1, ly1 = pyautogui.position()
-    print("   4. 请将鼠标放在中间【物资列表区域】的【右下角】...")
-    time.sleep(4)
-    lx2, ly2 = pyautogui.position()
-    COORDS["ctrl_q_list_box"] = [min(lx1, lx2), min(ly1, ly2), max(lx1, lx2), max(ly1, ly2)]
-    print(f"   ✅ 物资列表区域已锁定: {COORDS['ctrl_q_list_box']}")
+        x1, y1 = wait_and_capture("Ctrl+Q 面板：把鼠标放在左侧【当前岛屿名字】的左上角")
+        x2, y2 = wait_and_capture("Ctrl+Q 面板：把鼠标放在左侧【当前岛屿名字】的右下角")
+        COORDS["ctrl_q_island_box"] = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
 
-    save_coords(COORDS)
-    print("\n🎉 校准全部完成！配置已保存至 anno_coords_config.json。\n")
+        x1, y1 = wait_and_capture("Ctrl+Q 面板：把鼠标放在中间【物资列表区域】的左上角（包含物资名与右侧数字）")
+        x2, y2 = wait_and_capture("Ctrl+Q 面板：把鼠标放在中间【物资列表区域】的右下角")
+        COORDS["ctrl_q_list_box"] = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+
+        save_coords(COORDS)
+        print("\n🎉 校准全部完成！配置已保存至 anno_coords_config.json。\n")
+        if overlay.root is not None:
+            overlay.update(
+                "🎉 校准完成",
+                "坐标已保存。浮层将在 2 秒后关闭，可以按 Ctrl+Q 后使用 F8 / F7 扫描。",
+            )
+            time.sleep(2)
+    finally:
+        overlay.close()
 
 
 # =====================================================================
@@ -913,6 +1031,14 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(0 if run_selftest() else 1)
 
+    if "--overlay-test" in sys.argv:
+        ov = CalibrationOverlay()
+        for i in range(3, 0, -1):
+            ov.update("F9 浮层测试", f"第 {i} 秒：请把鼠标移到游戏里的目标位置")
+            time.sleep(1)
+        ov.close()
+        sys.exit(0)
+
     print("=" * 68)
     print("⚓ 《纪元1800》全自动贸易指挥中心 (Anno 1800 Trade Copilot) 已启动")
     print("=" * 68)
@@ -921,7 +1047,7 @@ if __name__ == "__main__":
     print("⌨️ 游戏内全局热键：")
     print("  • [F7]  在 Ctrl+Q 界面自动顺着左侧列表依次点击岛屿，全图批量扫描")
     print("  • [F8]  在 Ctrl+Q 界面对当前选中岛屿执行【多页滚轮自动截图 + 合并识别】")
-    print("  • [F9]  启动分辨率坐标与截图框校准向导（首次使用按一次即可）")
+    print("  • [F9]  启动坐标校准向导（提示会以置顶浮层显示在游戏画面上）")
     print("  • [F10] 一键清空当前选中船只的 6 个货仓残留杂物")
     print("  • [紧急中断] 自动点击期间将鼠标猛甩到屏幕左上角 (0,0) 即可立即终止")
     print("=" * 68)

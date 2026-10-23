@@ -1,4 +1,4 @@
-# 构建免环境分发包：PyInstaller 打包 -> 组装 -> 压缩
+﻿# 构建免环境分发包：PyInstaller 打包 -> 组装 -> 压缩
 # 用法（在项目根目录执行）：
 #   powershell -ExecutionPolicy Bypass -File packaging\build_package.ps1
 
