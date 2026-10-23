@@ -73,13 +73,13 @@ py -3 -m venv .venv
 > 首次运行可能触发 Windows SmartScreen（程序未签名），选择“更多信息 → 仍要运行”即可。
 > 需要 64 位 Windows 10/11；打包机器与目标机器的系统架构需一致（x64）。
 
-如需自行重新打包：
+如需自行重新打包（需要本机 `.venv` 环境）：
 
-```bat
-.venv\Scripts\pyinstaller --noconfirm --clean AnnoCopilot.spec
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_package.ps1
 ```
 
-产物位于 `dist/AnnoCopilot/`，压缩后即可分发。
+脚本会依次执行 PyInstaller、复制启动脚本与说明文档，并在 `dist/AnnoCopilot-win64.zip` 生成分发包。
 
 > 如果系统里的 `python` 指向 Microsoft Store 占位符（运行无输出、退出码 49），请使用 `py -3`，启动脚本已自动处理这一情况。
 
@@ -125,14 +125,17 @@ py -3 -m venv .venv
 
 ```text
 Anno1800_ass/
-├── anno_copilot.py        # 单文件全栈主程序（OCR + RPA + HTTP + 内嵌看板）
-├── requirements.txt       # Python 依赖
-├── start_copilot.bat      # 源码版一键启动脚本（自动提权 / 建环境 / 启动）
-├── AnnoCopilot.spec       # PyInstaller 打包配置
-├── start_as_admin.bat     # 分发包启动脚本（管理员权限运行 exe）
-├── smoke_test_ocr.py      # 离线 OCR 冒烟测试
-├── 1800Ai_read_me.md      # 原始构建规范
+├── anno_copilot.py            # 单文件全栈主程序（OCR + RPA + HTTP + 内嵌看板）
+├── requirements.txt           # Python 依赖
+├── start_copilot.bat          # 源码版一键启动脚本（自动提权 / 建环境 / 启动）
+├── AnnoCopilot.spec           # PyInstaller 打包配置
 ├── README.md
+├── docs/
+│   └── 1800Ai_read_me.md      # 原始构建规范
+├── packaging/
+│   ├── start_as_admin.bat     # 分发包启动脚本（管理员权限运行 exe）
+│   ├── 使用说明.txt           # 分发包内使用说明
+│   └── build_package.ps1      # 一键打包脚本
 └── .gitignore
 ```
 
